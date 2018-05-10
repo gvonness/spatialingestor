@@ -155,7 +155,8 @@ def validate_input(input):
     missing_metadata_keys = required_metadata_keys - set(input['metadata'].keys())
 
     if missing_metadata_keys:
-        raise util.JobError('Missing metadata keys: {0}'.format(missing_metadata_keys))
+        message = 'Missing metadata keys: {0}!'.format(', '.join(missing_metadata_keys))
+        raise util.JobError('Missing metadata keys: {0}'.format(message))
 
     required_db_metadata_keys = {
         'db_host',
@@ -699,6 +700,8 @@ def get_spatial_upload_formats(data, package, input_format):
 
 
 def create_or_update_resources(data, package, parent_resource, bbox_obj, expansion_formats, layer, workspace, logger):
+    from formats import formats_data
+
     ws_addr = data['geoserver_public_url'] + "/" + workspace + "/"
 
     number_updated = 0
@@ -707,7 +710,7 @@ def create_or_update_resources(data, package, parent_resource, bbox_obj, expansi
         number_updated += 1
 
         resource_command = 'resource_create'
-        if old_id is not None:
+        if old_id:
             resource_command = 'resource_update'
             new_res = ckan_command('resource_show', {'id': old_id}, data)
             new_res['id'] = old_id
@@ -720,45 +723,37 @@ def create_or_update_resources(data, package, parent_resource, bbox_obj, expansi
                        'spatial_child_of': data['resource_id'],
                        'parent_resource_url': parent_resource['url']}
 
-        if new_res['format'] == 'json':
-            new_res['format'] = 'geojson'
+        for format_data in formats_data:
+            if new_format == format_data['type']:
+                r_format = new_format
+                if new_format.lower() == 'geojson':
+                    r_format = 'json'
+                name = str(format_data['name']).format(
+                    package_title=package['title'])
+                url = str(format_data['url']).format(
+                    ws_addr=ws_addr,
+                    layer=layer,
+                    bbox_obj_minx=bbox_obj['minx'] if 'minx' in bbox_obj else '',
+                    bbox_obj_miny=bbox_obj['miny'] if 'miny' in bbox_obj else '',
+                    bbox_obj_maxx=bbox_obj['maxx'] if 'maxx' in bbox_obj else '',
+                    bbox_obj_maxy=bbox_obj['maxy'] if 'maxy' in bbox_obj else '',
+                    format=urllib.quote(r_format.lower()))
+                description = format_data['description']
+                new_res['name'] = name
+                new_res['url'] = url
+                new_res['description'] = description
+                if 'format' in format_data:
+                    new_res['format'] = format_data['format']
 
-        if new_format in ["IMAGE/PNG", 'KML']:
-            new_res['url'] = ws_addr + "wms?request=GetMap&layers=" + layer + "&bbox=" + bbox_obj['minx'] + "," + \
-                             bbox_obj['miny'] + "," + bbox_obj['maxx'] + "," + bbox_obj[
-                                 'maxy'] + "&width=512&height=512&format=" + urllib.quote(new_format.lower())
-            if new_format == "IMAGE/PNG":
-                new_res['name'] = package['title'] + " Preview Image"
-                new_res['description'] = "View overview image of this dataset"
-            elif new_format == "KML":
-                new_res['name'] = package['title'] + " KML"
-                new_res[
-                    'description'] = "View a map of this dataset in web and desktop spatial data tools including Google Earth"
-        elif new_format == "WMS":
-            new_res['url'] = ws_addr + "wms?request=GetCapabilities"
-            new_res['name'] = package['title'] + " - Preview this Dataset (WMS)"
-            new_res['description'] = "View the data in this dataset online via an online map"
-            new_res['wms_layer'] = layer
-        elif new_format == "WFS":
-            new_res['url'] = ws_addr + "wfs"
-            new_res['name'] = package['title'] + " Web Feature Service API Link"
-            new_res['description'] = "WFS API Link for use in Desktop GIS tools"
-            new_res['wfs_layer'] = layer
-        elif new_format in ['CSV', 'JSON', 'GEOJSON']:
-            if new_format == 'CSV':
-                serialization = 'csv'
-                new_res['name'] = package['title'] + " CSV"
-                new_res['description'] = "For summary of the objects/data in this collection"
+                #EXTRA KEYS
+                if 'wms_layer' in format_data:
+                    wms_layer = str(format_data['wms_layer']).format(layer=layer)
+                    new_res['wms_layer'] = wms_layer
+                if 'wfs_layer' in format_data:
+                    wfs_layer = str(format_data['wfs_layer']).format(layer=layer)
+                    new_res['wfs_layer'] = wfs_layer
             else:
-                serialization = 'json'
-                new_res['name'] = package['title'] + " GeoJSON"
-                new_res['description'] = "For use in web-based data visualisation of this collection"
-
-            new_res[
-                'url'] = ws_addr + "wfs?request=GetFeature&typeName=" + layer + "&outputFormat=" + urllib.quote(
-                serialization)
-        else:
-            continue
+                continue
 
         try:
             ckan_command(resource_command, new_res, data)
